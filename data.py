@@ -1,11 +1,13 @@
 import numpy as np
 import torch
+import pickle
 from torch.utils.data import Dataset
 import json
+from transformers import BartTokenizer, BertTokenizer
 
 # macro
-ZUCO_SENTIMENT_LABELS = json.load(open('./dataset/ZuCo/task1-SR/sentiment_labels/sentiment_labels.json'))
-SST_SENTIMENT_LABELS = json.load(open('./dataset/stanfordsentiment/ternary_dataset.json'))
+ZUCO_SENTIMENT_LABELS = json.load(open(r'./dataset/ZuCo/task1-SR/sentiment_labels/sentiment_labels.json'))
+SST_SENTIMENT_LABELS = json.load(open(r'./dataset/stanfordsentiment/ternary_dataset.json'))
 
 
 def normalize_1d(input_tensor):
@@ -135,7 +137,7 @@ def get_input_sample(sent_obj, tokenizer, eeg_type='GD', bands=['_t1', '_t2', '_
 
 class ZuCo_dataset(Dataset):
     def __init__(self, input_dataset_dicts, phase, tokenizer, subject='ALL', eeg_type='GD',
-                 bands=['_t1', '_t2', '_a1', '_a2', '_b1', '_b2', '_g1', '_g2'], setting='unique_sent',
+                 bands=['_t1', '_t2', '_a1', '_a2', '_b1', '_b2', '_g1', '_g2'], setting='unique_sent', fold_index=0,
                  is_add_CLS_token=False):
         self.inputs = []
         self.tokenizer = tokenizer
@@ -151,64 +153,33 @@ class ZuCo_dataset(Dataset):
                 subjects = [subject]
 
             total_num_sentence = len(input_dataset_dict[subjects[0]])
+            dev_divider = int(0.2 * fold_index * total_num_sentence)
+            buffer = int(0.2 * total_num_sentence)
 
-            train_divider = int(0.8 * total_num_sentence)
-            dev_divider = train_divider + int(0.1 * total_num_sentence)
+            print(f'5-fold cross-validation: {fold_index} fold')
 
-            print(f'train divider = {train_divider}')
-            print(f'dev divider = {dev_divider}')
+            print(f'train divider : 0-{dev_divider}, {dev_divider + buffer}-{total_num_sentence}')
+            print(f'dev divider : {dev_divider}-{dev_divider + buffer}')
 
             if setting == 'unique_sent':
                 # take first 80% as trainset, 10% as dev and 10% as test
                 if phase == 'train':
                     print('[INFO]initializing a train set...')
                     for key in subjects:
-                        for i in range(train_divider):
-                            input_sample = get_input_sample(input_dataset_dict[key][i], self.tokenizer, eeg_type,
-                                                            bands=bands, add_CLS_token=is_add_CLS_token)
-                            if input_sample is not None:
-                                self.inputs.append(input_sample)
+                        for i in range(dev_divider):
+                            input_sample1 = get_input_sample(input_dataset_dict[key][i], self.tokenizer, eeg_type,
+                                                             bands=bands, add_CLS_token=is_add_CLS_token)
+                            if input_sample1 is not None:
+                                self.inputs.append(input_sample1)
+                        for i in range(dev_divider + buffer, total_num_sentence):
+                            input_sample2 = get_input_sample(input_dataset_dict[key][i], self.tokenizer, eeg_type,
+                                                             bands=bands, add_CLS_token=is_add_CLS_token)
+                            if input_sample2 is not None:
+                                self.inputs.append(input_sample2)
                 elif phase == 'dev':
                     print('[INFO]initializing a dev set...')
                     for key in subjects:
-                        for i in range(train_divider, dev_divider):
-                            input_sample = get_input_sample(input_dataset_dict[key][i], self.tokenizer, eeg_type,
-                                                            bands=bands, add_CLS_token=is_add_CLS_token)
-                            if input_sample is not None:
-                                self.inputs.append(input_sample)
-                elif phase == 'test':
-                    print('[INFO]initializing a test set...')
-                    for key in subjects:
-                        for i in range(dev_divider, total_num_sentence):
-                            input_sample = get_input_sample(input_dataset_dict[key][i], self.tokenizer, eeg_type,
-                                                            bands=bands, add_CLS_token=is_add_CLS_token)
-                            if input_sample is not None:
-                                self.inputs.append(input_sample)
-            elif setting == 'unique_subj':
-                print('WARNING!!! only implemented for SR v1 dataset ')
-                # subject ['ZAB', 'ZDM', 'ZGW', 'ZJM', 'ZJN', 'ZJS', 'ZKB', 'ZKH', 'ZKW'] for train
-                # subject ['ZMG'] for dev
-                # subject ['ZPH'] for test
-                if phase == 'train':
-                    print(f'[INFO]initializing a train set using {setting} setting...')
-                    for i in range(total_num_sentence):
-                        for key in ['ZAB', 'ZDM', 'ZGW', 'ZJM', 'ZJN', 'ZJS', 'ZKB', 'ZKH', 'ZKW']:
-                            input_sample = get_input_sample(input_dataset_dict[key][i], self.tokenizer, eeg_type,
-                                                            bands=bands, add_CLS_token=is_add_CLS_token)
-                            if input_sample is not None:
-                                self.inputs.append(input_sample)
-                if phase == 'dev':
-                    print(f'[INFO]initializing a dev set using {setting} setting...')
-                    for i in range(total_num_sentence):
-                        for key in ['ZMG']:
-                            input_sample = get_input_sample(input_dataset_dict[key][i], self.tokenizer, eeg_type,
-                                                            bands=bands, add_CLS_token=is_add_CLS_token)
-                            if input_sample is not None:
-                                self.inputs.append(input_sample)
-                if phase == 'test':
-                    print(f'[INFO]initializing a test set using {setting} setting...')
-                    for i in range(total_num_sentence):
-                        for key in ['ZPH']:
+                        for i in range(dev_divider, dev_divider + buffer):
                             input_sample = get_input_sample(input_dataset_dict[key][i], self.tokenizer, eeg_type,
                                                             bands=bands, add_CLS_token=is_add_CLS_token)
                             if input_sample is not None:
@@ -277,3 +248,60 @@ class SST_tenary_dataset(Dataset):
     def __getitem__(self, idx):
         input_sample = self.inputs[idx]
         return input_sample
+        # keys: input_embeddings, input_attn_mask, input_attn_mask_invert, target_ids, target_mask,
+
+
+'''sanity test'''
+if __name__ == '__main__':
+
+    check_dataset = 'stanford_sentiment'
+
+    if check_dataset == 'ZuCo':
+        whole_dataset_dicts = []
+
+        dataset_path_task1 = '/shared/nas/data/m1/wangz3/SAO_project/SAO/dataset/ZuCo/task1-SR/pickle/task1-SR-dataset-with-tokens_6-25.pickle'
+        with open(dataset_path_task1, 'rb') as handle:
+            whole_dataset_dicts.append(pickle.load(handle))
+
+        dataset_path_task2 = '/shared/nas/data/m1/wangz3/SAO_project/SAO/dataset/ZuCo/task2-NR/pickle/task2-NR-dataset-with-tokens_7-10.pickle'
+        with open(dataset_path_task2, 'rb') as handle:
+            whole_dataset_dicts.append(pickle.load(handle))
+
+        # dataset_path_task3 = '/shared/nas/data/m1/wangz3/SAO_project/SAO/dataset/ZuCo/task3-TSR/pickle/task3-TSR-dataset-with-tokens_7-10.pickle'
+        # with open(dataset_path_task3, 'rb') as handle:
+        #     whole_dataset_dicts.append(pickle.load(handle))
+
+        dataset_path_task2_v2 = '/shared/nas/data/m1/wangz3/SAO_project/SAO/dataset/ZuCo/task2-NR-2.0/pickle/task2-NR-2.0-dataset-with-tokens_7-15.pickle'
+        with open(dataset_path_task2_v2, 'rb') as handle:
+            whole_dataset_dicts.append(pickle.load(handle))
+
+        print()
+        for key in whole_dataset_dicts[0]:
+            print(f'task2_v2, sentence num in {key}:', len(whole_dataset_dicts[0][key]))
+        print()
+
+        tokenizer = BartTokenizer.from_pretrained('facebook/bart-large')
+        dataset_setting = 'unique_sent'
+        subject_choice = 'ALL'
+        print(f'![Debug]using {subject_choice}')
+        eeg_type_choice = 'GD'
+        print(f'[INFO]eeg type {eeg_type_choice}')
+        bands_choice = ['_t1', '_t2', '_a1', '_a2', '_b1', '_b2', '_g1', '_g2']
+        print(f'[INFO]using bands {bands_choice}')
+        train_set = ZuCo_dataset(whole_dataset_dicts, 'train', tokenizer, subject=subject_choice,
+                                 eeg_type=eeg_type_choice, bands=bands_choice, setting=dataset_setting)
+        dev_set = ZuCo_dataset(whole_dataset_dicts, 'dev', tokenizer, subject=subject_choice, eeg_type=eeg_type_choice,
+                               bands=bands_choice, setting=dataset_setting)
+        test_set = ZuCo_dataset(whole_dataset_dicts, 'test', tokenizer, subject=subject_choice,
+                                eeg_type=eeg_type_choice, bands=bands_choice, setting=dataset_setting)
+
+        print('trainset size:', len(train_set))
+        print('devset size:', len(dev_set))
+        print('testset size:', len(test_set))
+
+    elif check_dataset == 'stanford_sentiment':
+        tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
+        SST_dataset = SST_tenary_dataset(SST_SENTIMENT_LABELS, tokenizer)
+        print('SST dataset size:', len(SST_dataset))
+        print(SST_dataset[0])
+        print(SST_dataset[1])
